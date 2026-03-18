@@ -1,75 +1,143 @@
 const express = require("express");
-const { exec } = require("child_process");
+const http = require("http");
 const cors = require("cors");
+const { Server } = require("socket.io");
+const config = require("./config");
+const apiRoutes = require("./routes/api");
+const { checkConnection } = require("./adb");
 
 const app = express();
+const server = http.createServer(app);
+
+// Middleware
 app.use(express.json());
 app.use(cors());
 
-const ANDROID_IP = "100.125.170.26:5555";
+// Routes
+app.use("/api", apiRoutes);
 
-function runAdbCommand(command) {
-  return new Promise((resolve, reject) => {
-    const fullCommand = `adb -s ${ANDROID_IP} ${command}`;
-    exec(fullCommand, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        reject(error.message);
-      } else {
-        resolve(stdout);
-      }
-    });
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// WebSocket
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  },
+  pingInterval: config.PING_INTERVAL,
+  pingTimeout: config.PING_TIMEOUT
+});
+
+io.on("connection", (socket) => {
+  console.log("Client connected:", socket.id);
+  socket.emit("connected", { clientId: socket.id });
+
+  checkConnection().then(connected => {
+    socket.emit("status", { connected, androidIp: config.ANDROID_IP });
   });
-}
 
-app.post("/api/execute", async (req, res) => {
-  try {
-    const { command, action, path, content } = req.body;
+  socket.on("ping", () => {
+    socket.emit("pong", { timestamp: Date.now() });
+  });
 
-    let result;
+  socket.on("chat", async (data, callback) => {
+    const { callOllamaWithTools, callOllama } = require("./ollama");
+    const { executeAction } = require("./adb");
+    
+    try {
+      const response = await callOllamaWithTools(data.message);
+      
+      let toolCalls = response.message?.tool_calls || [];
+      const content = response.message?.content || "";
+      
+      if (toolCalls.length === 0 && content.trim().startsWith("{")) {
+        try {
+          const parsed = JSON.parse(content);
+          if (parsed.name && parsed.arguments) {
+            toolCalls = [{ function: parsed }];
+          }
+        } catch (e) {}
+      }
 
-    switch (action) {
-      case "list":
-        result = await runAdbCommand(`shell ls -la "${path}"`);
-        break;
-      case "read":
-        result = await runAdbCommand(`shell cat "${path}"`);
-        break;
-      case "write":
-        result = await runAdbCommand(`shell echo "${content}" > "${path}"`);
-        break;
-      case "delete":
-        result = await runAdbCommand(`shell rm "${path}"`);
-        break;
-      case "push":
-        result = await runAdbCommand(`push "${content}" "${path}"`);
-        break;
-      case "pull":
-        result = await runAdbCommand(`pull "${path}" "${content}"`);
-        break;
-      case "mkdir":
-        result = await runAdbCommand(`shell mkdir "${path}"`);
-        break;
-      case "exists":
-        result = await runAdbCommand(`shell ls "${path}"`);
-        break;
-      default:
-        result = await runAdbCommand(`shell ${command}`);
+      if (toolCalls.length > 0) {
+        const toolResults = [];
+        for (const toolCall of toolCalls) {
+          const { name, arguments: args } = toolCall.function;
+          try {
+            const result = await executeAction(
+              name.replace("adb_", ""),
+              args.path || "",
+              args.content || ""
+            );
+            toolResults.push({ tool: name, result });
+          } catch (e) {
+            toolResults.push({ tool: name, error: e.message });
+          }
+        }
+
+        const isFileOperation = toolCalls.some(tc =>
+          ["adb_list", "adb_read"].includes(tc.function.name)
+        );
+
+        if (isFileOperation) {
+          callback({
+            response: "🤖 Here's what I found:\n\n" + (toolResults[0].result || "Done"),
+            toolResults
+          });
+          return;
+        }
+
+        const finalResponse = await callOllama(
+          `User asked: "${data.message}". Tool results: ${JSON.stringify(toolResults)}. Provide a short response.`,
+          "Keep responses short and based only on actual tool results."
+        );
+
+        callback({
+          response: "🤖 " + (finalResponse.message?.content || "Done"),
+          toolResults
+        });
+      } else {
+        callback({ response: "🤖 " + (response.message?.content || "No response") });
+      }
+    } catch (error) {
+      callback({ error: error.message });
     }
+  });
 
-    res.json({ success: true, result: result || "Done" });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error });
-  }
+  socket.on("execute", async (data, callback) => {
+    const { executeAction } = require("./adb");
+    try {
+      const { action, path, content } = data;
+      const result = await executeAction(action, path, content);
+      callback({ success: true, result });
+    } catch (error) {
+      callback({ success: false, error: error.message });
+    }
+  });
+
+  socket.on("status", async (callback) => {
+    const connected = await checkConnection();
+    callback({ connected });
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("Client disconnected:", socket.id, reason);
+  });
 });
 
-app.get("/api/status", (req, res) => {
-  runAdbCommand("get-state")
-    .then(() => res.json({ connected: true }))
-    .catch(() => res.json({ connected: false }));
-});
+// Heartbeat
+setInterval(async () => {
+  const connected = await checkConnection();
+  io.emit("heartbeat", { connected, timestamp: Date.now() });
+}, config.HEARTBEAT_INTERVAL);
 
-const PORT = 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Access via: http://100.85.62.80:${PORT}`);
+// Start server
+server.listen(config.PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${config.PORT}`);
+  console.log(`HTTP API: http://100.85.62.80:${config.PORT}/api/chat`);
+  console.log(`WebSocket: ws://100.85.62.80:${config.PORT}`);
+  console.log(`Heartbeat: every ${config.HEARTBEAT_INTERVAL / 1000}s`);
 });

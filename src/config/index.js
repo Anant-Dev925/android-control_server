@@ -1,0 +1,9 @@
+module.exports = {
+  ANDROID_IP: "100.125.170.26:5555",
+  OLLAMA_HOST: "http://localhost:11434",
+  OLLAMA_MODEL: "qwen2.5-coder:7b",
+  PORT: 3000,
+  PING_INTERVAL: 25000,
+  PING_TIMEOUT: 20000,
+  HEARTBEAT_INTERVAL: 30000
+};
