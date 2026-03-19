@@ -2,9 +2,9 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
-const config = require("./config");
-const apiRoutes = require("./routes/api");
-const { checkConnection } = require("./adb");
+const config = require("./src/config");
+const apiRoutes = require("./src/routes/api");
+const { checkConnection } = require("./src/adb");
 
 const app = express();
 const server = http.createServer(app);
@@ -25,17 +25,17 @@ app.get("/health", (req, res) => {
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
   },
   pingInterval: config.PING_INTERVAL,
-  pingTimeout: config.PING_TIMEOUT
+  pingTimeout: config.PING_TIMEOUT,
 });
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
   socket.emit("connected", { clientId: socket.id });
 
-  checkConnection().then(connected => {
+  checkConnection().then((connected) => {
     socket.emit("status", { connected, androidIp: config.ANDROID_IP });
   });
 
@@ -46,13 +46,13 @@ io.on("connection", (socket) => {
   socket.on("chat", async (data, callback) => {
     const { callOllamaWithTools, callOllama } = require("./ollama");
     const { executeAction } = require("./adb");
-    
+
     try {
       const response = await callOllamaWithTools(data.message);
-      
+
       let toolCalls = response.message?.tool_calls || [];
       const content = response.message?.content || "";
-      
+
       if (toolCalls.length === 0 && content.trim().startsWith("{")) {
         try {
           const parsed = JSON.parse(content);
@@ -70,7 +70,7 @@ io.on("connection", (socket) => {
             const result = await executeAction(
               name.replace("adb_", ""),
               args.path || "",
-              args.content || ""
+              args.content || "",
             );
             toolResults.push({ tool: name, result });
           } catch (e) {
@@ -78,29 +78,32 @@ io.on("connection", (socket) => {
           }
         }
 
-        const isFileOperation = toolCalls.some(tc =>
-          ["adb_list", "adb_read"].includes(tc.function.name)
+        const isFileOperation = toolCalls.some((tc) =>
+          ["adb_list", "adb_read"].includes(tc.function.name),
         );
 
         if (isFileOperation) {
           callback({
-            response: "🤖 Here's what I found:\n\n" + (toolResults[0].result || "Done"),
-            toolResults
+            response:
+              "🤖 Here's what I found:\n\n" + (toolResults[0].result || "Done"),
+            toolResults,
           });
           return;
         }
 
         const finalResponse = await callOllama(
           `User asked: "${data.message}". Tool results: ${JSON.stringify(toolResults)}. Provide a short response.`,
-          "Keep responses short and based only on actual tool results."
+          "Keep responses short and based only on actual tool results.",
         );
 
         callback({
           response: "🤖 " + (finalResponse.message?.content || "Done"),
-          toolResults
+          toolResults,
         });
       } else {
-        callback({ response: "🤖 " + (response.message?.content || "No response") });
+        callback({
+          response: "🤖 " + (response.message?.content || "No response"),
+        });
       }
     } catch (error) {
       callback({ error: error.message });
@@ -137,7 +140,7 @@ setInterval(async () => {
 // Start server
 server.listen(config.PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${config.PORT}`);
-  console.log(`HTTP API: http://100.85.62.80:${config.PORT}/api/chat`);
-  console.log(`WebSocket: ws://100.85.62.80:${config.PORT}`);
+  console.log(`HTTP API: http://${config.SERVER_IP}:${config.PORT}/api/chat`);
+  console.log(`ADB: ${config.ANDROID_IP}`);
   console.log(`Heartbeat: every ${config.HEARTBEAT_INTERVAL / 1000}s`);
 });
