@@ -85,7 +85,7 @@ io.on("connection", (socket) => {
         if (isFileOperation) {
           callback({
             response:
-              "🤖 Here's what I found:\n\n" + (toolResults[0].result || "Done"),
+              "Here's what I found:\n\n" + (toolResults[0].result || "Done"),
             toolResults,
           });
           return;
@@ -97,12 +97,12 @@ io.on("connection", (socket) => {
         );
 
         callback({
-          response: "🤖 " + (finalResponse.message?.content || "Done"),
+          response: finalResponse.message?.content || "Done",
           toolResults,
         });
       } else {
         callback({
-          response: "🤖 " + (response.message?.content || "No response"),
+          response: response.message?.content || "No response",
         });
       }
     } catch (error) {

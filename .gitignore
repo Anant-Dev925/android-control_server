@@ -10,6 +10,9 @@ logs/
 *.log
 npm-debug.log*
 
+# Sessions
+sessions/
+
 # OS
 .DS_Store
 Thumbs.db

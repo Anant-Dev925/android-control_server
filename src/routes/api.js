@@ -1,26 +1,113 @@
 const express = require("express");
 const { checkConnection, executeAction } = require("../adb");
 const { callOllama, callOllamaWithTools } = require("../ollama");
+const sessionManager = require("../session");
 const config = require("../config");
 
 const router = express.Router();
 
-// Chat endpoint
+// ============ SESSION ENDPOINTS ============
+
+// Get all sessions
+router.get("/sessions", (req, res) => {
+  try {
+    const sessions = sessionManager.getAllSessions();
+    res.json({ success: true, sessions });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Create new session
+router.post("/sessions", (req, res) => {
+  try {
+    const session = sessionManager.createSession();
+    res.json({ success: true, session });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get session history
+router.get("/sessions/:id", (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Session not found" });
+    }
+    res.json({ success: true, session });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete session
+router.delete("/sessions/:id", (req, res) => {
+  try {
+    const success = sessionManager.clearSession(req.params.id);
+    res.json({ success });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Rename session
+router.put("/sessions/:id", (req, res) => {
+  try {
+    const { name } = req.body;
+    const session = sessionManager.renameSession(req.params.id, name);
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+    res.json({ success: true, session });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============ CHAT ENDPOINT ============
+
 router.post("/chat", async (req, res) => {
   try {
-    const { message, useTools = true } = req.body;
+    const { message, useTools = true, sessionId } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
     }
 
+    // Get or create session
+    let currentSession;
+    if (sessionId) {
+      currentSession = sessionManager.getSession(sessionId);
+    }
+
+    // Create new session if none exists
+    if (!currentSession) {
+      currentSession = sessionManager.createSession();
+      console.log("Created new session:", currentSession.id);
+    }
+
+    const sessionId_used = currentSession.id;
+    console.log("Using session:", sessionId_used);
+    console.log("Message history:", currentSession.messages.length, "messages");
+
+    // Build conversation history for Ollama - limit to last 20 messages
+    const recentMessages = currentSession.messages.slice(-20);
+    const conversationHistory = recentMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    console.log("Sending", conversationHistory.length, "messages to Ollama");
     console.log("Received message:", message);
 
     const response = useTools
-      ? await callOllamaWithTools(message)
+      ? await callOllamaWithTools(message, conversationHistory)
       : await callOllama(message);
 
-    console.log("Ollama response:", JSON.stringify(response));
+    console.log("Ollama response:", JSON.stringify(response).substring(0, 200));
 
     let toolCalls = response.message?.tool_calls || [];
 
@@ -61,7 +148,6 @@ router.post("/chat", async (req, res) => {
     const userMessage = message.toLowerCase();
 
     // If we have list + read + write pattern with summarize intent, handle write ourselves
-    // Remove AI's write calls to prevent placeholder overwrite
     const hasListCall = toolCalls.some((t) => t.function.name === "adb_list");
     const hasReadCalls = toolCalls.some((t) => t.function.name === "adb_read");
     const hasWriteCall = toolCalls.some((t) => t.function.name === "adb_write");
@@ -75,14 +161,15 @@ router.post("/chat", async (req, res) => {
         userMessage.includes("create") ||
         userMessage.includes("third"));
 
-    // Filter out write calls if we'll handle it ourselves
     const filteredToolCalls = willHandleWrite
       ? toolCalls.filter((t) => t.function.name !== "adb_write")
       : toolCalls;
 
+    let finalResponse = "";
+    let toolResults = [];
+
     if (filteredToolCalls.length > 0) {
       console.log("Tool calls detected:", filteredToolCalls);
-      const toolResults = [];
 
       // Execute tools in order
       for (const toolCall of filteredToolCalls) {
@@ -109,7 +196,6 @@ router.post("/chat", async (req, res) => {
       );
 
       if (listResult && userMessage.includes("read")) {
-        // Extract filenames from list result
         const fileMatches = listResult.result.match(/📄 (.+?)(?:\n|$)/g);
         if (fileMatches) {
           const files = fileMatches
@@ -118,7 +204,6 @@ router.post("/chat", async (req, res) => {
           const folderPath = toolCalls[0].function.arguments.path;
           console.log("Auto-reading files from list:", files);
 
-          // Read each file with correct filenames
           const readResults = [];
           for (const file of files) {
             if (
@@ -147,11 +232,9 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          // Get successful reads
           const successfulReads = readResults.filter((r) => r.success);
 
           if (successfulReads.length > 0) {
-            // Generate summary
             const readContent = successfulReads
               .map((r) => `File: ${r.arguments?.path}\n${r.result}`)
               .join("\n\n---\n\n");
@@ -168,15 +251,12 @@ ${readContent}`;
               summary.message?.content || "Summary not generated";
             console.log("Generated summary:", summaryContent.substring(0, 100));
 
-            // Check if user wants to create a summary file
             const wantsSummaryFile =
               userMessage.includes("summary") ||
               userMessage.includes("summar") ||
-              userMessage.includes("create") ||
-              userMessage.includes("third");
+              userMessage.includes("create");
 
             if (wantsSummaryFile) {
-              // Determine filename
               let summaryFilename = "summary.txt";
               const namedMatch = userMessage.match(
                 /(?:named|called)\s+["']?(\S+?)["']?(?:\s|$)/i,
@@ -199,21 +279,49 @@ ${readContent}`;
               const summaryPath = folderPath + "/" + summaryFilename;
               await executeAction("write", summaryPath, summaryContent);
 
+              finalResponse =
+                "I've read all files and created **" +
+                summaryFilename +
+                "** with the summary:\n\n" +
+                summaryContent;
+              toolResults = [...toolResults, ...readResults];
+
+              // Save to session
+              sessionManager.addMessageToSession(
+                sessionId_used,
+                "user",
+                message,
+              );
+              sessionManager.addMessageToSession(
+                sessionId_used,
+                "assistant",
+                finalResponse,
+                toolResults,
+              );
+
               res.json({
-                response:
-                  "🤖 I've read all files and created **" +
-                  summaryFilename +
-                  "** with the summary:\n\n" +
-                  summaryContent,
-                toolCalls: [...toolResults, ...readResults],
+                response: finalResponse,
+                toolCalls: toolResults,
+                sessionId: sessionId_used,
               });
               return;
             }
 
-            // Just show content
+            finalResponse = "I've read the files:\n\n" + readContent;
+            toolResults = [...toolResults, ...readResults];
+
+            sessionManager.addMessageToSession(sessionId_used, "user", message);
+            sessionManager.addMessageToSession(
+              sessionId_used,
+              "assistant",
+              finalResponse,
+              toolResults,
+            );
+
             res.json({
-              response: "🤖 I've read the files:\n\n" + readContent,
-              toolCalls: [...toolResults, ...readResults],
+              response: finalResponse,
+              toolCalls: toolResults,
+              sessionId: sessionId_used,
             });
             return;
           }
@@ -222,30 +330,48 @@ ${readContent}`;
 
       // Return appropriate response for list
       if (["adb_list"].includes(filteredToolCalls[0].function.name)) {
-        const successResult = toolResults.find((r) => !r.error);
-        if (successResult) {
-          res.json({
-            response: "🤖 Here's what I found:\n\n" + successResult.result,
-            toolCalls: toolResults,
-          });
-        } else {
-          res.json({
-            response: "🤖 Error: " + toolResults[0].error,
-            toolCalls: toolResults,
-          });
-        }
-        return;
+        finalResponse =
+          "Here's what I found:\n\n" +
+          (toolResults.find((r) => !r.error)?.result || "Done");
+      } else {
+        // Get AI response for tool results
+        const toolResponse = await callOllama(
+          `User asked: "${message}". Tool results: ${JSON.stringify(toolResults)}. Provide a short response.`,
+          "Keep responses short and based only on actual tool results.",
+        );
+        finalResponse = toolResponse.message?.content || "Done";
       }
 
+      // Save to session
+      sessionManager.addMessageToSession(sessionId_used, "user", message);
+      sessionManager.addMessageToSession(
+        sessionId_used,
+        "assistant",
+        finalResponse,
+        toolResults,
+      );
+
       res.json({
-        response: "🤖 Done!",
+        response: finalResponse,
         toolCalls: toolResults,
+        sessionId: sessionId_used,
       });
       return;
     } else if (toolCalls.length === 0) {
       console.log("No tool calls, returning direct response");
+      finalResponse = content || "No response";
+
+      // Save to session
+      sessionManager.addMessageToSession(sessionId_used, "user", message);
+      sessionManager.addMessageToSession(
+        sessionId_used,
+        "assistant",
+        finalResponse,
+      );
+
       res.json({
-        response: "🤖 " + (response.message?.content || "No response"),
+        response: finalResponse,
+        sessionId: sessionId_used,
       });
     }
   } catch (error) {
@@ -254,7 +380,8 @@ ${readContent}`;
   }
 });
 
-// Direct execute endpoint
+// ============ DIRECT EXECUTE ENDPOINT ============
+
 router.post("/execute", async (req, res) => {
   try {
     const { action, path, content } = req.body;
@@ -268,13 +395,15 @@ router.post("/execute", async (req, res) => {
   }
 });
 
-// Status endpoint
+// ============ STATUS ENDPOINT ============
+
 router.get("/status", async (req, res) => {
   const connected = await checkConnection();
   res.json({ connected, androidIp: config.ANDROID_IP });
 });
 
-// Reconnect endpoint
+// ============ RECONNECT ENDPOINT ============
+
 router.post("/reconnect", async (req, res) => {
   const { exec } = require("child_process");
   try {

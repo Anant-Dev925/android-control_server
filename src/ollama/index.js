@@ -93,12 +93,7 @@ const tools = {
   ],
 };
 
-function makeRequest(prompt, systemPrompt, useTools = false) {
-  return new Promise((resolve, reject) => {
-    const messages = [
-      {
-        role: "system",
-        content: `You are an AI assistant for an Android device.
+const SYSTEM_PROMPT = `You are an AI assistant for an Android device.
 
 YOUR IDENTITY:
 "I am an AI assistant created by Anant Dev, powered by Qwen2.5 AI model."
@@ -114,15 +109,34 @@ AVAILABLE TOOLS:
 - adb_write: Write content to a file
 - adb_delete: Delete file or folder
 - adb_mkdir: Create directory
-- adb_status: Check device connection`,
+- adb_status: Check device connection`;
+
+function makeRequest(prompt, systemPrompt, useTools = false, conversationHistory = []) {
+  return new Promise((resolve, reject) => {
+    const messages = [
+      {
+        role: "system",
+        content: systemPrompt || SYSTEM_PROMPT,
       },
-      { role: "user", content: prompt },
     ];
+
+    // Add conversation history
+    if (conversationHistory.length > 0) {
+      messages.push(...conversationHistory);
+    }
+
+    // Add current user message
+    messages.push({ role: "user", content: prompt });
 
     const requestBody = {
       model: config.OLLAMA_MODEL,
       messages,
       stream: false,
+      keep_alive: 300,
+      options: {
+        temperature: 0.7,
+        top_p: 0.9,
+      }
     };
 
     if (useTools) {
@@ -131,13 +145,15 @@ AVAILABLE TOOLS:
 
     const data = JSON.stringify(requestBody);
 
+    console.log("Ollama request size:", data.length, "bytes");
+
     const req = http.request(
       `${config.OLLAMA_HOST}/api/chat`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Content-Length": data.length,
+          "Content-Length": Buffer.byteLength(data),
         },
       },
       (res) => {
@@ -148,13 +164,18 @@ AVAILABLE TOOLS:
             const parsed = JSON.parse(body);
             resolve(parsed);
           } catch (e) {
-            reject(e);
+            console.error("Ollama parse error:", e.message);
+            console.error("Ollama response body:", body.substring(0, 500));
+            reject(new Error(`Failed to parse Ollama response: ${body.substring(0, 200)}`));
           }
         });
       },
     );
 
-    req.on("error", reject);
+    req.on("error", (e) => {
+      console.error("Ollama connection error:", e.message);
+      reject(e);
+    });
     req.write(data);
     req.end();
   });
@@ -164,8 +185,8 @@ function callOllama(prompt, systemPrompt) {
   return makeRequest(prompt, systemPrompt, false);
 }
 
-function callOllamaWithTools(prompt) {
-  return makeRequest(prompt, null, true);
+function callOllamaWithTools(prompt, conversationHistory = []) {
+  return makeRequest(prompt, null, true, conversationHistory);
 }
 
 module.exports = {

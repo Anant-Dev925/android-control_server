@@ -188,7 +188,7 @@ function runCommand(command) {
 
 async function executeAction(action, path, content) {
   let result;
-  const safePath = path.replace(/"/g, '\\"');
+  const safePath = (path || "").replace(/"/g, '\\"');
   const safeContent = content ? content.replace(/"/g, '\\"') : "";
 
   switch (action) {
