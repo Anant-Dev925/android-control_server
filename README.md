@@ -43,11 +43,6 @@ adb devices
 node server.js
 ```
 
-**Test:**
-```bash
-curl http://localhost:3000/api/status
-```
-
 ## API Endpoints
 
 | Endpoint | Method | Description |
