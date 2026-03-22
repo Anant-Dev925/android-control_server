@@ -25,6 +25,7 @@ function createSession(name = null) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     messages: [],
+    knowledge: [],
   };
 
   fs.writeFileSync(getSessionFile(sessionId), JSON.stringify(session, null, 2));
@@ -88,6 +89,47 @@ function addMessageToSession(sessionId, role, content, toolCalls = []) {
   return session;
 }
 
+function addKnowledge(sessionId, topic, content) {
+  const session = getSession(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  if (!session.knowledge) {
+    session.knowledge = [];
+  }
+
+  session.knowledge.push({
+    topic,
+    content,
+    learnedAt: new Date().toISOString(),
+  });
+
+  session.updatedAt = new Date().toISOString();
+  fs.writeFileSync(getSessionFile(sessionId), JSON.stringify(session, null, 2));
+  return session;
+}
+
+function getKnowledge(sessionId) {
+  const session = getSession(sessionId);
+  if (!session) {
+    return [];
+  }
+  return session.knowledge || [];
+}
+
+function clearKnowledge(sessionId) {
+  const session = getSession(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  session.knowledge = [];
+  session.updatedAt = new Date().toISOString();
+  fs.writeFileSync(getSessionFile(sessionId), JSON.stringify(session, null, 2));
+  return session;
+}
+
 function clearSession(sessionId) {
   const filePath = getSessionFile(sessionId);
   if (fs.existsSync(filePath)) {
@@ -140,4 +182,7 @@ module.exports = {
   clearSession,
   getAllSessions,
   renameSession,
+  addKnowledge,
+  getKnowledge,
+  clearKnowledge,
 };

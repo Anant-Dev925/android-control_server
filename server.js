@@ -43,6 +43,11 @@ io.on("connection", (socket) => {
     socket.emit("pong", { timestamp: Date.now() });
   });
 
+  socket.on("status", async () => {
+    const connected = await checkConnection();
+    socket.emit("status", { connected, androidIp: config.ANDROID_IP });
+  });
+
   socket.on("chat", async (data, callback) => {
     const { callOllamaWithTools, callOllama } = require("./ollama");
     const { executeAction } = require("./adb");
@@ -119,11 +124,6 @@ io.on("connection", (socket) => {
     } catch (error) {
       callback({ success: false, error: error.message });
     }
-  });
-
-  socket.on("status", async (callback) => {
-    const connected = await checkConnection();
-    callback({ connected });
   });
 
   socket.on("disconnect", (reason) => {

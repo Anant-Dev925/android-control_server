@@ -1,0 +1,435 @@
+================================================================================
+AI ANDROID FILE MANAGER - PROJECT PLAN
+================================================================================
+Last Updated: 21-03-2026
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+An AI-powered file manipulation tool for Android devices. Users interact with
+their Android phone through a natural language chat interface. The AI
+understands file commands and executes them via ADB.
+
+ARCHITECTURE:
+[Flutter App] → [PC Server:3000] → [Ollama AI] → [ADB Tools] → [Android]
+       ↑                                                      ↑
+       └──────────────── Tailscale VPN ──────────────────────┘
+
+================================================================================
+CURRENT STATUS - IMPLEMENTED FEATURES
+================================================================================
+
+FILE OPERATIONS:
++------------------+------------+--------+--------+--------+--------+
+| Feature          | Create     | Read   | Edit   | Delete | Move   |
++------------------+------------+--------+--------+--------+--------+
+| .txt/.md/.json   | ✅         | ✅     | ✅     | ✅     | ✅     |
+| .pdf             | ✅ PDFKit  | ✅     | ✅     | ✅     | ✅     |
+| .docx            | ✅ docx    | ✅     | ✅     | ✅     | ✅     |
+| .pptx            | ✅ pptxgen | ✅     | ✅     | ✅     | ✅     |
+| Directories      | ✅         | ✅     | N/A    | ✅     | ✅     |
++------------------+------------+--------+--------+--------+--------+
+
+AI CAPABILITIES:
++------------------+----------------------------+
+| Feature          | Status                     |
++------------------+----------------------------+
+| File listing     | ✅                         |
+| File reading     | ✅ (pdf/docx/pptx/txt)    |
+| File writing    | ✅ (pdf/docx/pptx/txt)    |
+| File editing    | ✅ (PDF text append)       |
+| File deletion   | ✅                         |
+| Multi-step ops  | ✅ (list+read+write)      |
+| Session memory   | ✅ (20 message history)    |
+| /train command  | ✅ (learn from files)      |
+| /forget command | ✅ (clear learned)        |
++------------------+----------------------------+
+
+FLUTTER APP FEATURES:
++-------------------------+----------------------------+
+| Feature                 | Status                     |
++-------------------------+----------------------------+
+| Dark/Light theme toggle | ✅                         |
+| Settings page          | ✅                         |
+| About page             | ✅                         |
+| Offline mode           | ✅ (cached messages)       |
+| Connection indicators  | ✅ (red when offline)      |
+| Local message caching  | ✅ (SharedPreferences)     |
+| Syntax highlighting    | ✅                         |
+| Auto-scroll            | ✅                         |
+| Tailscale auto-connect | ✅                         |
++-------------------------+----------------------------+
+
+================================================================================
+MISSING FEATURES - PRIORITY LIST
+================================================================================
+
+P1 - HIGH PRIORITY (Core Functionality)
+================================================================================
+
+| Feature           | Description                              | Effort | Status |
+|-------------------|------------------------------------------|--------|--------|
+| Web Search        | Give AI internet access                  | Medium | TODO   |
+| Upload to Phone   | Transfer files from PC to Android        | Medium | TODO   |
+| Download from Phone| Transfer files from Android to PC         | Medium | TODO   |
+| Auto-tool parse   | Parse commands when AI doesn't use tools | Done   | ✅     |
+| /train command    | Learn from files                         | Done   | ✅     |
+
+P2 - MEDIUM PRIORITY (Enhanced Experience)
+================================================================================
+
+| Feature           | Description                              | Effort | Status |
+|-------------------|------------------------------------------|--------|--------|
+| File Browser UI   | Visual file explorer in Flutter app       | High   | TODO   |
+| Batch Operations  | Delete/rename/move multiple files         | Medium | TODO   |
+| Compress/Zip      | Create zip archives                       | Medium | TODO   |
+| Extract Archives  | Unzip/untar files                         | Medium | TODO   |
+| Progress Indicators| Show operation progress                   | Medium | TODO   |
+| Settings Screen   | Configure server IP, model, timeout        | Done   | ✅     |
+| Dark/Light Theme  | Theme toggle                             | Done   | ✅     |
+
+P3 - LOW PRIORITY (Nice to Have)
+================================================================================
+
+| Feature           | Description                              | Effort | Status |
+|-------------------|------------------------------------------|--------|--------|
+| Vision/Image AI   | Analyze images on phone                   | Medium | TODO   |
+| Voice Input       | Voice commands                           | Medium | TODO   |
+| App List          | List installed apps                       | Low    | TODO   |
+| Battery Status    | Show battery level                        | Low    | TODO   |
+| Notifications     | Push notifications for operations         | Medium | TODO   |
+| Command History   | Show past commands                        | Low    | TODO   |
+| Offline Mode      | Cache responses                          | Done   | ✅     |
+| iOS Build         | Make app work on iOS                     | High   | TODO   |
+| Production APK    | Sign APK for release                      | Medium | TODO   |
+
+================================================================================
+KNOWLEDGE / TRAIN SYSTEM
+================================================================================
+
+Commands:
+  /train file1.txt file2.md     - Learn from specific files
+  /train /sdcard/Notes          - Learn from folder contents
+  /forget                        - Clear all learned knowledge
+
+How it works:
+  1. /train reads files via ADB
+  2. Stores content in session knowledge base
+  3. Injects knowledge into every AI call context
+  4. Persists for the session (survives server restart)
+
+API:
+  GET  /api/knowledge/:sessionId  - Get learned knowledge
+  DELETE /api/knowledge/:sessionId - Clear knowledge
+
+================================================================================
+QUICK IMPLEMENTATIONS (LOW EFFORT)
+================================================================================
+
+1. RENAME/MOVE FILES
+--------------------
+Tool: adb_rename, adb_move
+Command: adb shell mv /source /dest
+Status: ✅ DONE
+
+2. COPY FILES
+-------------
+Tool: adb_copy
+Command: adb shell cp /source /dest
+Status: ✅ DONE
+
+3. FILE SEARCH
+--------------
+Tool: adb_search
+Command: adb shell find /sdcard -name "*.pdf"
+Status: ✅ DONE
+
+4. FILE INFO (STAT)
+--------------------
+Tool: adb_info
+Command: adb shell stat /path/to/file
+Status: ✅ DONE
+
+5. STORAGE INFO
+---------------
+Tool: adb_storage
+Command: adb shell df -h
+Status: ✅ DONE
+
+6. BATTERY STATUS
+-----------------
+Tool: adb_battery
+Command: adb shell dumpsys battery
+Status: TODO (can add via ADB)
+
+================================================================================
+FILE FORMAT SUPPORT MATRIX
+================================================================================
+
+| Format | Read | Create | Edit | Delete | Compress | Notes                    |
+|--------|------|--------|------|--------|---------|--------------------------|
+| .txt   | ✅   | ✅     | ✅   | ✅     | ❌      | Plain text               |
+| .md    | ✅   | ✅     | ✅   | ✅     | ❌      | Markdown                 |
+| .json  | ✅   | ✅     | ✅   | ✅     | ❌      | JSON files               |
+| .pdf   | ✅   | ✅     | ✅   | ✅     | ❌      | Read via pdftotext       |
+| .docx  | ✅   | ✅     | ✅   | ✅     | ❌      | Edit = append text only  |
+| .pptx  | ✅   | ✅     | ✅   | ✅     | ❌      | Edit = add slides only   |
+| .jpg   | ✅   | ❌     | ❌   | ✅     | ❌      | Read = metadata only     |
+| .png   | ✅   | ❌     | ❌   | ✅     | ❌      | Read = metadata only     |
+| .mp3   | ✅   | ❌     | ❌   | ✅     | ❌      | Read = metadata only     |
+| .mp4   | ✅   | ❌     | ❌   | ✅     | ❌      | Read = metadata only     |
+| .zip   | ✅   | ✅     | ❌   | ✅     | N/A     | Extract via unzip        |
+| .apk   | ⚠️   | ❌     | ❌   | ✅     | ❌      | Basic listing only       |
+
+Legend: ✅ Full Support | ⚠️ Partial | ❌ Not Supported
+
+================================================================================
+TOOL REFERENCE (CURRENT)
+================================================================================
+
+adb_list        - List files in a directory
+adb_read        - Read any file (txt, pdf, docx, pptx, md, json)
+adb_write       - Write content to a file
+adb_edit_pdf    - Add text to existing PDF
+adb_delete      - Delete file or folder
+adb_mkdir       - Create directory
+adb_rename      - Rename file or folder
+adb_copy        - Copy file to location
+adb_search      - Search files by name pattern
+adb_info        - Get file info (size, date)
+adb_storage     - Get storage info
+adb_status      - Check Android connection
+
+TOOL REFERENCE (PLANNED)
+================================================================================
+
+adb_move        - Move file to another location
+adb_battery     - Get battery status
+adb_zip         - Create zip archive
+adb_unzip       - Extract zip archive
+adb_upload      - Upload file from PC to Android
+adb_download    - Download file from Android to PC
+adb_batch_delete- Delete multiple files
+adb_app_list    - List installed apps
+adb_app_install - Install APK
+adb_app_uninstall- Uninstall app
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+EXISTING:
+GET  /api/status           - Check Android connection
+POST /api/chat             - Chat with AI (useTools, sessionId)
+GET  /api/sessions         - List all sessions
+POST /api/sessions         - Create new session
+GET  /api/sessions/:id     - Get session history
+DELETE /api/sessions/:id   - Delete session
+PUT   /api/sessions/:id    - Rename session
+POST /api/execute          - Direct file operations
+POST /api/reconnect        - Reconnect ADB
+GET  /health               - Health check
+GET  /api/storage          - Get storage info
+GET  /api/knowledge/:id    - Get learned knowledge
+DELETE /api/knowledge/:id - Clear knowledge
+
+PLANNED:
+POST /api/upload           - Upload file to Android
+POST /api/download         - Download file from Android
+GET  /api/apps             - List installed apps
+
+================================================================================
+FLUTTER APP FEATURES
+================================================================================
+
+CURRENT UI:
++------------------------+
+| [PC|ADB] [🌙] [⚙️]     |  <- AppBar with theme/settings
++------------------------+
+| [! Server offline !]   |  <- Offline banner (red)
++------------------------+
+| [Quick Actions Bar]    |
++------------------------+
+|                        |
+| [Chat Messages]        |  <- Purple bubbles, white text in dark
+|                        |
++------------------------+
+| [Disabled Input] [Send]|  <- Disabled when offline
++------------------------+
+
+DRAWER:
++------------------------+
+| Sessions               |
+| [+] New Session        |
++------------------------+
+| Session 1              |
+| Session 2              |
+| ...                    |
++------------------------+
+| Settings               |  <- Bottom
+| About                  |  <- Bottom
++------------------------+
+
+SETTINGS PAGE:
++------------------------+
+| Appearance             |
+|   Theme: System/L/Dark |
+|   Syntax Highlighting  |
++------------------------+
+| Chat                   |
+|   Auto Scroll          |
+|   Context Limit        |
++------------------------+
+| Connection             |
+|   Server URL           |
+|   WebSocket URL        |
++------------------------+
+| About                  |
++------------------------+
+
+ABOUT PAGE:
++------------------------+
+| [Robot Icon]           |
+| Android AI Control     |
+| AI-Powered Android     |
++------------------------+
+| App Info               |
+| AI Model: qwen2.5-coder:7b |
+| Capabilities:          |
+| - File Management      |
+| - Train Mode           |
+| - Commands             |
++------------------------+
+| Developer              |
+| 10th Semester Project  |
++------------------------+
+
+================================================================================
+NETWORK CONFIGURATION
+================================================================================
+
+PC Tailscale IP:       100.85.62.80
+Android Tailscale IP:  100.101.120.96
+ADB Connection:        100.101.120.96:5555
+Server Port:           3000
+
+================================================================================
+DEPENDENCIES
+================================================================================
+
+SERVER (Node.js/npm):
+- express
+- socket.io
+- cors
+- pdfkit
+- pdf-lib
+- docx
+- pptxgenjs
+
+FLUTTER APP:
+- flutter_bloc
+- equatable
+- get_it
+- web_socket_channel
+- flutter_highlight
+- highlight
+- socket_io_client
+- shared_preferences
+
+SYSTEM TOOLS (PC):
+- adb (Android Debug Bridge)
+- pdftotext (poppler-utils)
+- Tailscale VPN
+
+================================================================================
+SESSION MANAGEMENT
+================================================================================
+
+- Each session has unique ID (32-char hex)
+- Chat history stored in sessions/<id>.json
+- Last 20 messages sent to AI (configurable)
+- Knowledge base per session (via /train)
+- History survives server restarts
+- Sessions can be renamed/deleted
+- Local caching via SharedPreferences (client)
+
+================================================================================
+THEME CONFIGURATION
+================================================================================
+
+Light Mode:
+- Primary: Purple (default Material 3)
+- User bubble: Purple
+- AI bubble: Light gray
+- Text: Dark
+
+Dark Mode:
+- Primary: Purple (default Material 3)
+- User bubble: Dark purple (#4A3B6B)
+- AI bubble: Dark gray
+- Text: White
+
+Toggle: Sun/Moon icon in AppBar
+
+================================================================================
+TODO TRACKER
+================================================================================
+
+[P1] Core File Operations:
+[x] adb_rename - Rename files ✅
+[x] adb_copy   - Copy files ✅
+[x] adb_search - Search files ✅
+[x] adb_info   - File info ✅
+[x] /train command - Learn from files ✅
+
+[P1] AI Improvements:
+[x] /train command ✅
+[x] /forget command ✅
+[x] Knowledge injection ✅
+[ ] Web Search (DuckDuckGo)
+[ ] Vision model (llama3.2-vision)
+
+[P2] Enhanced Operations:
+[x] Settings screen ✅
+[x] Dark/Light theme ✅
+[ ] File Browser UI
+[ ] Batch operations
+[ ] Compress/Extract
+[ ] Upload/Download
+[ ] Progress indicators
+
+[P3] Advanced Features:
+[x] Offline mode (caching) ✅
+[ ] Vision/Image AI
+[ ] Voice input
+[ ] App management
+[x] Battery/Storage display ✅
+[ ] Notifications
+[ ] Shizuku integration
+[ ] iOS build
+[ ] Production APK
+
+================================================================================
+HISTORY OF CHANGES
+================================================================================
+
+21-03-2026:
+- Added /train and /forget commands for knowledge learning
+- Added Settings page (theme, syntax, auto-scroll, context)
+- Added About page (app info, AI model, capabilities)
+- Added dark/light theme toggle in AppBar
+- Added offline mode with cached messages
+- Added connection indicators (red when disconnected)
+- Fixed user bubble color for dark mode
+- Added local message caching via SharedPreferences
+- App shows ChatPage always (no separate offline screen)
+- Disabled chat input when server not connected
+
+20-03-2026:
+- Multi-step file operations (list+read+write)
+- Auto-extract filenames from list results
+
+17-03-2026:
+- Initial setup with Tailscale + Ollama + Flutter
+
+================================================================================

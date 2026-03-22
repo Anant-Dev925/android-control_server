@@ -1,10 +1,231 @@
 const express = require("express");
-const { checkConnection, executeAction } = require("../adb");
+const { checkConnection, executeAction, tools } = require("../adb");
 const { callOllama, callOllamaWithTools } = require("../ollama");
 const sessionManager = require("../session");
 const config = require("../config");
 
 const router = express.Router();
+
+// ============ AUTO-PARSE FILE OPERATIONS ============
+
+function autoParseFileOperation(message) {
+  const msg = message.toLowerCase();
+  
+  // Delete pattern: "delete /path/to/file" or "delete file.txt"
+  const deleteMatch = message.match(/delete\s+["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("delete") || msg.includes("remove")) && deleteMatch) {
+    let path = deleteMatch[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    return { function: { name: "adb_delete", arguments: { path } } };
+  }
+  
+  // Read pattern: "read /path/to/file" or "show me file.txt"
+  const readMatch = message.match(/(?:read|show|open|view|check)\s+["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("read") || msg.includes("show") || msg.includes("view")) && readMatch && !msg.includes("read both")) {
+    let path = readMatch[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    return { function: { name: "adb_read", arguments: { path } } };
+  }
+  
+  // List pattern: "list files in /path" or "ls /path"
+  const listMatch = message.match(/(?:list|show|ls)\s+(?:files?\s+(?:in|from|at))?\s*["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("list") || msg.includes("show files") || msg.includes("ls ")) && listMatch) {
+    let path = listMatch[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    return { function: { name: "adb_list", arguments: { path } } };
+  }
+  
+  // Write pattern: "write ... to /path/file.txt" or "create file.txt with ..."
+  const writeMatch = message.match(/(?:write|create|save|make)\s+(?:a\s+)?(?:file\s+)?(?:named?\s+)?["']?([^\s'"]+\.\w+)\s+(?:with|containing|and\s+)?/i);
+  if ((msg.includes("write") || msg.includes("create")) && writeMatch && !msg.includes("append") && !msg.includes("edit") && !msg.includes("add text")) {
+    let path = writeMatch[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    // Extract content after "with" or "containing"
+    const contentMatch = message.match(/(?:with|containing|content:|:\s*)(.+)$/is);
+    const content = contentMatch ? contentMatch[1].trim() : "Empty file";
+    return { function: { name: "adb_write", arguments: { path, content } } };
+  }
+  
+  // Write pattern WITHOUT filename: "create file at /path" → use AI_gen
+  const writeNoFileMatch = message.match(/(?:write|create|save|make)\s+(?:a\s+)?(?:file|doc|pdf|text|note)\s+(?:at|in|to)\s+["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("write") || msg.includes("create")) && writeNoFileMatch && !msg.includes("append") && !msg.includes("edit")) {
+    let folderPath = writeNoFileMatch[1];
+    if (!folderPath.startsWith("/")) {
+      folderPath = "/sdcard/Download/" + folderPath;
+    }
+    // Determine extension from context
+    let ext = ".txt";
+    if (msg.includes("pdf") || msg.includes("document")) ext = ".pdf";
+    else if (msg.includes("docx") || msg.includes("docs") || msg.includes("word")) ext = ".docx";
+    else if (msg.includes("pptx") || msg.includes("powerpoint")) ext = ".pptx";
+    else if (msg.includes("xlsx") || msg.includes("excel")) ext = ".xlsx";
+    else if (msg.includes("md") || msg.includes("markdown")) ext = ".md";
+    const path = folderPath.endsWith("/") ? folderPath + "AI_gen" + ext : folderPath + "/AI_gen" + ext;
+    
+    // Extract content - try quoted text first
+    let content = "Generated content";
+    const quotedMatch = message.match(/["']([^"']{2,})["']/);
+    if (quotedMatch) {
+      content = quotedMatch[1];
+    } else {
+      const withMatch = message.match(/(?:with|containing)\s+["']?([^"']+)["']?/i);
+      if (withMatch) {
+        content = withMatch[1].trim();
+      }
+    }
+    
+    return { function: { name: "adb_write", arguments: { path, content } } };
+  }
+  
+  // Docs/Docx file pattern: "create docs file at /path" or "create a docx"
+  if ((msg.includes("docs") || msg.includes("docx") || msg.includes("word")) && (msg.includes("create") || msg.includes("write") || msg.includes("make"))) {
+    // Extract path - find /sdcard/... pattern
+    const pathMatch = message.match(/\/sdcard\/[^\s'"]+/i);
+    let path = "/sdcard/Download/document.docx";
+    if (pathMatch) {
+      let extractedPath = pathMatch[0];
+      // If path is a directory, add filename
+      if (!extractedPath.includes(".")) {
+        extractedPath = extractedPath + "/document.docx";
+      } else if (!extractedPath.endsWith(".docx")) {
+        const name = extractedPath.split("/").pop();
+        extractedPath = extractedPath.replace(name, "document.docx");
+      }
+      path = extractedPath;
+    }
+    
+    // Extract content - find text in quotes or after "containing"/"with"
+    let content = "Document content";
+    const quotedMatch = message.match(/["']([^"']{3,})["']/);
+    if (quotedMatch) {
+      content = quotedMatch[1];
+    } else {
+      const withMatch = message.match(/(?:with|containing)\s+["']?([^"']+)["']?/i);
+      if (withMatch) {
+        content = withMatch[1].trim();
+      }
+    }
+    
+    // Check for emoji keyword
+    if (msg.includes("emoji")) {
+      content += " 😊";
+    }
+    
+    return { function: { name: "adb_write", arguments: { path, content } } };
+  }
+  
+  // Edit/Append pattern for any file type
+  if ((msg.includes("append") || msg.includes("edit") || msg.includes("add text") || msg.includes("modify")) && !msg.includes("read")) {
+    // Find file in message (any extension)
+    const fileMatch = message.match(/([^\s]+\.(?:pdf|docx|pptx|txt|md|json|xlsx))/i);
+    if (fileMatch) {
+      let path = fileMatch[1];
+      if (!path.startsWith("/")) {
+        path = "/sdcard/Download/" + path;
+      }
+      // Extract text to add
+      const textMatch = message.match(/["']([^"']{2,})["']/);
+      let content = textMatch ? textMatch[1] : "Updated content";
+      
+      if (path.toLowerCase().endsWith(".pdf")) {
+        return { function: { name: "adb_edit_pdf", arguments: { path, content } } };
+      } else {
+        // For docx/pptx/txt, we need to create new version
+        // This is a limitation - auto-parse can't read existing content
+        return { function: { name: "adb_write", arguments: { path, content } } };
+      }
+    }
+    
+    // Also check for /sdcard path patterns
+    const sdcardMatch = message.match(/\/sdcard\/[^\s]+/i);
+    if (sdcardMatch && (msg.includes("append") || msg.includes("edit"))) {
+      const textMatch = message.match(/["']([^"']{2,})["']/);
+      let content = textMatch ? textMatch[1] : "Updated content";
+      return { function: { name: "adb_write", arguments: { path: sdcardMatch[0], content } } };
+    }
+  }
+  
+  // Storage pattern: "how much space", "storage info", "disk usage", etc.
+  if (msg.includes("storage") || msg.includes("space") || msg.includes("disk") || 
+      msg.includes("memory") || (msg.includes("how much") && msg.includes("free")) ||
+      msg.includes("biggest files") || msg.includes("largest folders")) {
+    return { function: { name: "adb_storage", arguments: {} } };
+  }
+  
+  // Battery pattern: "battery", "charge", "how much battery", etc.
+  if (msg.includes("battery") || msg.includes("charge") || 
+      (msg.includes("how much") && msg.includes("battery")) ||
+      (msg.includes("battery") && msg.includes("left")) ||
+      msg.includes("charging")) {
+    return { function: { name: "adb_battery", arguments: {} } };
+  }
+  
+  // Specs pattern: "specs", "specifications", "device info", "android info", etc.
+  if (msg.includes("specs") || msg.includes("specification") ||
+      msg.includes("device info") || msg.includes("android info") ||
+      msg.includes("phone info") || msg.includes("system info")) {
+    return { function: { name: "adb_specs", arguments: {} } };
+  }
+  
+  // Rename/Move pattern: "rename file to X" or "move file to X" or "rename X as Y"
+  const renameMatch = message.match(/rename\s+["']?([^\s'"]+)["']?\s+(?:to|as)\s+["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("rename") || msg.includes("move")) && renameMatch) {
+    let sourcePath = renameMatch[1];
+    let destPath = renameMatch[2];
+    // Only add prefix if path doesn't contain a slash
+    if (!sourcePath.includes("/")) {
+      sourcePath = "/sdcard/Download/" + sourcePath;
+    }
+    if (!destPath.includes("/")) {
+      destPath = "/sdcard/" + destPath;
+    }
+    return { function: { name: "adb_rename", arguments: { path: sourcePath, content: destPath } } };
+  }
+  
+  // Copy pattern: "copy file to X" or "duplicate file"
+  const copyMatch = message.match(/copy\s+["']?([^\s'"]+)["']?\s+(?:to|as)\s+["']?([^\s'"]+)["']?/i);
+  if (msg.includes("copy") || msg.includes("duplicate")) {
+    if (copyMatch) {
+      let sourcePath = copyMatch[1];
+      let destPath = copyMatch[2];
+      // Only add prefix if path doesn't contain a slash
+      if (!sourcePath.includes("/")) {
+        sourcePath = "/sdcard/Download/" + sourcePath;
+      }
+      if (!destPath.includes("/")) {
+        destPath = "/sdcard/" + destPath;
+      }
+      return { function: { name: "adb_copy", arguments: { path: sourcePath, content: destPath } } };
+    }
+  }
+  
+  // Search pattern: "search for X" or "find files named X" or "find X"
+  const searchMatch = message.match(/(?:search|find|look for)\s+(?:files?\s+(?:named|called)?\s*)?["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("search") || msg.includes("find")) && searchMatch) {
+    const pattern = searchMatch[1];
+    return { function: { name: "adb_search", arguments: { path: "/sdcard", content: pattern } } };
+  }
+  
+  // Info pattern: "info about file" or "file details" or "tell me about file"
+  const infoMatch = message.match(/(?:info|details|about)\s+(?:of|about|for)?\s*(?:file\s*)?["']?([^\s'"]+)["']?/i);
+  if ((msg.includes("info") || msg.includes("details") || msg.includes("tell me about")) && infoMatch) {
+    let path = infoMatch[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    return { function: { name: "adb_info", arguments: { path } } };
+  }
+  
+  return null;
+}
 
 // ============ SESSION ENDPOINTS ============
 
@@ -67,6 +288,86 @@ router.put("/sessions/:id", (req, res) => {
   }
 });
 
+// ============ /TRAIN COMMAND ============
+
+async function handleTrainCommand(message, sessionId) {
+  const files = [];
+  
+  const filePattern = /[\/"']([^\s'""]+\.(?:txt|md|pdf|docx|pptx|json))[\/"']/gi;
+  let match;
+  while ((match = filePattern.exec(message)) !== null) {
+    let path = match[1];
+    if (!path.startsWith("/")) {
+      path = "/sdcard/Download/" + path;
+    }
+    files.push({ path, name: match[1] });
+  }
+
+  if (files.length === 0) {
+    const folderMatch = message.match(/\/sdcard\/[^\s'"]+/i);
+    if (folderMatch) {
+      const folderPath = folderMatch[0];
+      const listResult = await executeAction("list", folderPath, "");
+      const fileMatches = listResult.match(/📄 (.+?)(?:\n|$)/g);
+      if (fileMatches) {
+        for (const f of fileMatches) {
+          const name = f.replace("📄 ", "").trim();
+          if (/\.(txt|md|pdf|docx|pptx|json)$/i.test(name)) {
+            files.push({ path: folderPath + "/" + name, name });
+          }
+        }
+      }
+    }
+  }
+
+  if (files.length === 0) {
+    return { success: false, message: "No files found to learn from. Use: /train <file1.txt> <file2.md> or /train /folder/path" };
+  }
+
+  const learned = [];
+  for (const file of files) {
+    try {
+      const content = await executeAction("read", file.path, "");
+      const topic = file.name.replace(/\.[^.]+$/, "");
+      sessionManager.addKnowledge(sessionId, topic, content);
+      learned.push(file.name);
+    } catch (e) {
+      console.log("Failed to read:", file.name, e.message);
+    }
+  }
+
+  if (learned.length > 0) {
+    const knowledge = sessionManager.getKnowledge(sessionId);
+    return {
+      success: true,
+      message: `Learned from ${learned.length} file(s): ${learned.join(", ")}\n\nI now have ${knowledge.length} knowledge item(s) in this session. I'll use this context in future conversations.`,
+      knowledgeCount: knowledge.length,
+    };
+  }
+
+  return { success: false, message: "Failed to read any files" };
+}
+
+// ============ KNOWLEDGE ENDPOINTS ============
+
+router.get("/knowledge/:sessionId", (req, res) => {
+  try {
+    const knowledge = sessionManager.getKnowledge(req.params.sessionId);
+    res.json({ success: true, knowledge, count: knowledge.length });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.delete("/knowledge/:sessionId", (req, res) => {
+  try {
+    sessionManager.clearKnowledge(req.params.sessionId);
+    res.json({ success: true, message: "Knowledge cleared" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ============ CHAT ENDPOINT ============
 
 router.post("/chat", async (req, res) => {
@@ -75,6 +376,49 @@ router.post("/chat", async (req, res) => {
 
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
+    }
+
+    // Check for /train command
+    if (message.toLowerCase().startsWith("/train")) {
+      let currentSession;
+      if (sessionId) {
+        currentSession = sessionManager.getSession(sessionId);
+      }
+      if (!currentSession) {
+        currentSession = sessionManager.createSession();
+      }
+
+      const trainResult = await handleTrainCommand(message, currentSession.id);
+      
+      sessionManager.addMessageToSession(currentSession.id, "user", message);
+      sessionManager.addMessageToSession(currentSession.id, "assistant", trainResult.message);
+
+      return res.json({
+        response: trainResult.message,
+        sessionId: currentSession.id,
+        knowledgeCount: trainResult.knowledgeCount || 0,
+      });
+    }
+
+    // Check for /forget command
+    if (message.toLowerCase().startsWith("/forget")) {
+      let currentSession;
+      if (sessionId) {
+        currentSession = sessionManager.getSession(sessionId);
+      }
+      if (!currentSession) {
+        currentSession = sessionManager.createSession();
+      }
+
+      sessionManager.clearKnowledge(currentSession.id);
+      sessionManager.addMessageToSession(currentSession.id, "user", message);
+      sessionManager.addMessageToSession(currentSession.id, "assistant", "I've forgotten all learned knowledge in this session.");
+
+      return res.json({
+        response: "I've forgotten all learned knowledge in this session.",
+        sessionId: currentSession.id,
+        knowledgeCount: 0,
+      });
     }
 
     // Get or create session
@@ -93,6 +437,14 @@ router.post("/chat", async (req, res) => {
     console.log("Using session:", sessionId_used);
     console.log("Message history:", currentSession.messages.length, "messages");
 
+    // Get knowledge for context
+    const knowledge = sessionManager.getKnowledge(sessionId_used);
+    let knowledgeContext = "";
+    if (knowledge.length > 0) {
+      knowledgeContext = "\n\nLEARNED KNOWLEDGE (use this in your responses):\n" +
+        knowledge.map((k, i) => `[${i + 1}] ${k.topic}: ${k.content}`).join("\n");
+    }
+
     // Build conversation history for Ollama - limit to last 20 messages
     const recentMessages = currentSession.messages.slice(-20);
     const conversationHistory = recentMessages.map((m) => ({
@@ -103,9 +455,13 @@ router.post("/chat", async (req, res) => {
     console.log("Sending", conversationHistory.length, "messages to Ollama");
     console.log("Received message:", message);
 
+    const userMessageWithKnowledge = knowledgeContext
+      ? message + knowledgeContext
+      : message;
+
     const response = useTools
-      ? await callOllamaWithTools(message, conversationHistory)
-      : await callOllama(message);
+      ? await callOllamaWithTools(userMessageWithKnowledge, conversationHistory)
+      : await callOllama(userMessageWithKnowledge);
 
     console.log("Ollama response:", JSON.stringify(response).substring(0, 200));
 
@@ -147,6 +503,15 @@ router.post("/chat", async (req, res) => {
     // Define userMessage early so we can use it for willHandleWrite check
     const userMessage = message.toLowerCase();
 
+    // AUTO-PARSE: If model didn't use tools but message is about file operations
+    if (toolCalls.length === 0 && useTools) {
+      const autoParsed = autoParseFileOperation(message);
+      if (autoParsed) {
+        console.log("Auto-parsed tool call:", autoParsed);
+        toolCalls = [autoParsed];
+      }
+    }
+
     // If we have list + read + write pattern with summarize intent, handle write ourselves
     const hasListCall = toolCalls.some((t) => t.function.name === "adb_list");
     const hasReadCalls = toolCalls.some((t) => t.function.name === "adb_read");
@@ -177,11 +542,16 @@ router.post("/chat", async (req, res) => {
         console.log("Executing tool:", name, "with args:", args);
 
         try {
-          const result = await executeAction(
-            name.replace("adb_", ""),
-            args.path || "",
-            args.content || "",
-          );
+          let result;
+          if (name === "adb_edit_pdf") {
+            result = await tools.pdf.editPdf(args.path, args.content);
+          } else {
+            result = await executeAction(
+              name.replace("adb_", ""),
+              args.path || "",
+              args.content || "",
+            );
+          }
           console.log("Tool result:", result.substring(0, 200));
           toolResults.push({ tool: name, result, arguments: args });
         } catch (e) {

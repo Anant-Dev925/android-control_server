@@ -43,11 +43,11 @@ const tools = {
       type: "function",
       function: {
         name: "adb_write",
-        description: "Write content to a file",
+        description: "Write content to a file. Automatically creates proper format for .pdf, .docx, .pptx files",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "File path" },
+            path: { type: "string", description: "File path (use .pdf, .docx, .pptx, .txt extension)" },
             content: { type: "string", description: "Content to write" },
           },
           required: ["path", "content"],
@@ -90,6 +90,104 @@ const tools = {
         parameters: { type: "object", properties: {} },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "adb_storage",
+        description: "Get storage information including total/used/available space and largest folders on the Android device",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_battery",
+        description: "Get battery status including charge level, charging status, and temperature",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_specs",
+        description: "Get complete Android device specifications including model, brand, android version, CPU, memory, display info",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_edit_pdf",
+        description: "Add text to the last page of an existing PDF file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Full path to the PDF file to edit" },
+            content: { type: "string", description: "Text to append to the PDF" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_rename",
+        description: "Rename or move a file/folder to a new location",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Current file/folder path" },
+            content: { type: "string", description: "New destination path (can be new name or new location)" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_copy",
+        description: "Copy a file or folder to a new location",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Source file/folder path" },
+            content: { type: "string", description: "Destination path for the copy" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_search",
+        description: "Search for files by name pattern in a directory",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Directory to search in (default: /sdcard)" },
+            content: { type: "string", description: "Search pattern (e.g., 'notes', 'photo', 'document')" },
+          },
+          required: ["content"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "adb_info",
+        description: "Get detailed information about a file or folder (size, permissions, type, modified date)",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "File or folder path" },
+          },
+          required: ["path"],
+        },
+      },
+    },
   ],
 };
 
@@ -98,18 +196,51 @@ const SYSTEM_PROMPT = `You are an AI assistant for an Android device.
 YOUR IDENTITY:
 "I am an AI assistant created by Anant Dev, powered by Qwen2.5 AI model."
 
-IMPORTANT RULES:
-- For greetings/conversation: respond naturally without tools
-- For file operations (list, read, write, delete): use tools
-- For summaries/text generation: return PLAIN TEXT only, no JSON, no tool calls
+CRITICAL RULE - ALWAYS USE TOOLS:
+**IF USER MENTIONS ANY FILE, YOU MUST USE A TOOL. NO TEXT RESPONSE.**
+
+TOOL USAGE (MUST FOLLOW):
+- "create/make/write file" → adb_write
+- "edit/append/modify file" → adb_write (use same file path with new content)
+- "delete/remove file" → adb_delete
+- "read/show/view file" → adb_read
+- "list/show files" → adb_list
+- "make folder" → adb_mkdir
+- "storage/space/disk/memory/how much" → adb_storage
+- "battery/charge/how much battery" → adb_battery
+- "specs/specifications/android info/device info" → adb_specs
+- "rename/move file" → adb_rename (path=current, content=new)
+- "copy/duplicate file" → adb_copy (path=source, content=destination)
+- "search/find files" → adb_search (path=folder, content=pattern)
+- "file info/details/properties" → adb_info
+
+HOW TO EDIT A FILE:
+- "edit file.docx by appending text X" → adb_write with path to that file and NEW full content
+- You cannot append to docx/pptx, you must create a NEW version with updated content
+- Read the file first, modify the content, then use adb_write with the new content
+
+IMPORTANT: 
+- For PDF editing only: adb_edit_pdf appends text
+- For all other files: adb_write creates a NEW file with new content
+- You MUST read the file first before editing, to know the current content
+
+JSON FORMAT (ALWAYS USE):
+{"name":"TOOL_NAME","arguments":{"path":"/full/path/file.ext","content":"text here"}}
 
 AVAILABLE TOOLS:
-- adb_list: List files in a directory
-- adb_read: Read any file including PDF, DOCX, PPTX
-- adb_write: Write content to a file
-- adb_delete: Delete file or folder
-- adb_mkdir: Create directory
-- adb_status: Check device connection`;
+- adb_list: List files
+- adb_read: Read file content
+- adb_write: Create OR overwrite file
+- adb_edit_pdf: Append text to PDF only
+- adb_delete: Delete files/folders
+- adb_mkdir: Create directories
+- adb_storage: Get storage info (total/used/available space and largest folders)
+- adb_rename: Rename or move file/folder
+- adb_copy: Copy file/folder
+- adb_search: Search files by name pattern
+- adb_info: Get file/folder details
+- adb_battery: Get battery status (level, charging, temperature)
+- adb_specs: Get Android device specifications (model, version, CPU, memory, display)`;
 
 function makeRequest(prompt, systemPrompt, useTools = false, conversationHistory = []) {
   return new Promise((resolve, reject) => {
