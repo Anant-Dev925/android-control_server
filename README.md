@@ -4,7 +4,88 @@
 
 AI-powered Android file management app using Flutter + Node.js + Ollama, controlled over Tailscale VPN.
 
+<<<<<<< HEAD
 ---
+=======
+```bash
+# Install dependencies
+npm install
+
+# Start server
+node server.js
+```
+
+Server runs on `http://100.85.62.80:3000`
+
+## Connection Setup
+
+### Prerequisites
+1. **Tailscale** installed on both PC and Android
+2. **ADB Over Network** app installed on Android (from Play Store)
+
+### Step-by-Step
+
+**On Android:**
+1. Open ADB Over Network app
+2. Keep app running (foreground service)
+
+**On PC:**
+```bash
+# Check Tailscale status
+tailscale status
+
+# Connect to Android (use Tailscale IP)
+adb connect 100.125.170.26:5555
+
+# Verify connection
+adb devices
+```
+
+**Start Server:**
+```bash
+node server.js
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Check Android connection |
+| `/api/execute` | POST | Run file operations |
+
+### Execute Actions
+
+```json
+// List files
+{"action": "list", "path": "/sdcard/Download"}
+
+// Read file
+{"action": "read", "path": "/sdcard/file.txt"}
+
+// Write file
+{"action": "write", "path": "/sdcard/test.txt", "content": "Hello World"}
+
+// Delete file
+{"action": "delete", "path": "/sdcard/file.txt"}
+
+// Create folder
+{"action": "mkdir", "path": "/sdcard/newfolder"}
+
+// Push file to Android
+{"action": "push", "path": "/sdcard/", "content": "local-file.txt"}
+
+// Pull file from Android
+{"action": "pull", "path": "/sdcard/file.txt", "content": "local-path/"}
+```
+
+## Reconnect (If Connection Breaks)
+
+```bash
+adb connect 100.125.170.26:5555
+adb devices
+node server.js
+```
+>>>>>>> 483f9d70061a164ca639eb3df56036729be4f592
 
 ## Architecture
 
